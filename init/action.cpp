@@ -16,6 +16,10 @@
 
 #include "action.h"
 
+#include <fcntl.h>
+#include <time.h>
+#include <unistd.h>
+
 #include <android-base/chrono_utils.h>
 #include <android-base/logging.h>
 #include <android-base/properties.h>
@@ -156,10 +160,46 @@ void Action::ExecuteAllCommands() const {
     }
 }
 
+/*
+ * [cannon] 开机耗时分析。
+ *
+ * init 自己的 LOG() 在 user 版本里既进不了 logcat 也进不了 dmesg（实测两条路都没有输出），
+ * 所以这里直接把耗时写文件。开关是标记文件 /data/misc/cannon_boottime：
+ *   adb shell su -c 'touch /data/misc/cannon_boottime'   # 打开，重启后生效
+ *   adb shell su -c 'cat /data/misc/cannon_boottime.log' # 看结果
+ *   adb shell su -c 'rm -f /data/misc/cannon_boottime*'  # 关闭
+ *
+ * 每行格式：<开机毫秒> +<耗时>ms <命令> [文件:行号] action=<触发的 action>
+ * 默认 2ms 以下的命令不记，避免把日志写爆。
+ */
+static void LogBootTiming(const Command& command, const std::string& trigger_name,
+                          const std::string& filename, long long duration_ms) {
+    struct timespec ts {};
+    if (clock_gettime(CLOCK_BOOTTIME, &ts) != 0) return;
+    const long long uptime_ms = ts.tv_sec * 1000LL + ts.tv_nsec / 1000000;
+
+    int fd = open("/data/misc/cannon_boottime.log", O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC,
+                  0644);
+    if (fd < 0) return;
+
+    std::string line = std::to_string(uptime_ms) + " +" + std::to_string(duration_ms) + "ms " +
+                       command.BuildCommandString() + " [" + filename + ":" +
+                       std::to_string(command.line()) + "] action=" + trigger_name + "\n";
+    if (write(fd, line.data(), line.size()) < 0) {
+        // 写失败就算了，别影响开机
+    }
+    close(fd);
+}
+
 void Action::ExecuteCommand(const Command& command) const {
     android::base::Timer t;
     auto result = command.InvokeFunc(subcontext_);
     auto duration = t.duration();
+
+    // [cannon] 只在标记文件存在时记录，平时零开销
+    if (duration.count() >= 2 && access("/data/misc/cannon_boottime", F_OK) == 0) {
+        LogBootTiming(command, BuildTriggersString(), filename_, duration.count());
+    }
 
     // Any action longer than 50ms will be warned to user as slow operation
     if (!result.has_value() || duration > 50ms ||
