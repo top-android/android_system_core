@@ -55,7 +55,6 @@ phony {
         "logwrapper_vendor",
         "mkshrc_vendor",
         "sh_vendor",
-        "toolbox_vendor",
         "toybox_vendor",
     ],
     vendor: true,

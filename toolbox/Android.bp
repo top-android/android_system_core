@@ -86,6 +86,7 @@ cc_binary {
 
 cc_binary {
     name: "toolbox_vendor",
+    installable: false,
     stem: "toolbox",
     vendor: true,
     defaults: ["toolbox_binary_defaults"],
